@@ -31,6 +31,18 @@ func logHandler(f func(w http.ResponseWriter,req *http.Request) error) func(w ht
 	}
 }
 
+func allowCORSMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqHash := context.Get(r, "hash")
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		log.Println(reqHash, "Adding CORS headers")
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func requestHashMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hash := hex.GetRand(12)
@@ -43,7 +55,9 @@ func requestHashMiddleware(next http.Handler) http.Handler {
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hash := context.Get(r, "hash")
-		log.Println(hash, color.Green("New request for"), color.Green(r.RequestURI))
+		ipForwardedFor := r.Header.Get("X-Forwarded-For")
+		log.Println(hash, color.Green("New request from"), color.Green(ipForwardedFor),
+			color.Green("for"), color.Green(r.RequestURI))
 
 		next.ServeHTTP(w, r)
 	})
@@ -94,6 +108,7 @@ func main() {
 	router:=mux.NewRouter()
 	router.Use(requestHashMiddleware)
 	router.Use(loggingMiddleware)
+	router.Use(allowCORSMiddleware)
 
 	router.HandleFunc("/extract", logHandler(InformUserOnGet)).Methods("GET")
 	router.HandleFunc("/extract", logHandler(ExtractCategories)).Methods("POST")
