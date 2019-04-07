@@ -11,6 +11,10 @@ import (
 	"net/http"
 )
 
+func init() {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+}
+
 // logHandler wraps a request handler in logging to mark the start and end of a request, and logs errors
 func logHandler(f func(w http.ResponseWriter,req *http.Request) error) func(w http.ResponseWriter,req *http.Request) {
 	return func(w http.ResponseWriter,req *http.Request) {
