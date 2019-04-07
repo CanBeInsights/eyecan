@@ -103,7 +103,7 @@ func fetchFromText(text string) *core.DetailedResponse {
 	return response
 }
 
-func fetchFromURL(url string) *core.DetailedResponse {
+func fetchFromURL(url string) (*core.DetailedResponse, error) {
 	response, responseErr := nlu.Analyze(
 		&naturallanguageunderstandingv1.AnalyzeOptions{
 			URL: &url,
@@ -119,35 +119,46 @@ func fetchFromURL(url string) *core.DetailedResponse {
 		},
 	)
 	if responseErr != nil {
-		panic(responseErr)
+		return nil, responseErr
 	}
 
-	return response
+	return response, nil
 }
 
-func Lookup(url string) string {
-	response := fetchFromURL(url)
+func Lookup(url string) (string, error) {
+	response, err := fetchFromURL(url)
+	if err != nil {
+		return "", err
+	}
 	result := nlu.GetAnalyzeResult(response)
 	b, _ := json.MarshalIndent(result, "", "  ")
-	return string(b)
+	return string(b), nil
 }
 
-func LookupCategories(url string) string {
-	response := fetchFromURL(url)
+func LookupCategories(url string) (string, error) {
+	response, err0 := fetchFromURL(url)
+	if err0 != nil {
+		return "", err0
+	}
 	result := nlu.GetAnalyzeResult(response).Categories
-	b, _ := json.MarshalIndent(result[0], "", "	")
-	return string(b)
+
+	b, err1 := json.MarshalIndent(result[0], "", "	")
+	if err1 != nil {
+		return "", err1
+	}
+	return string(b), nil
+
 }
 
-func UnmarshalURLs(urlString string) historyObj {
+func UnmarshalURLs(urlString string) (historyObj, error) {
 	inputJSON := `{ "historyElems": ` + urlString + ` }`	// Wrap array in valid outer JSON matching marshall struct
 	var res historyObj
 	// TODO: Handle this unhandled error, possibly using the code below it
-	json.Unmarshal([]byte(inputJSON), &res)
-	//if err != nil {
-	//	println()
-	//}
-	return res
+	err := json.Unmarshal([]byte(inputJSON), &res)
+	if err != nil {
+		return historyObj{}, err
+	}
+	return res, nil
 }
 
 // ToElems function receiver compiles the final set of output data based on the input data
@@ -233,19 +244,29 @@ func (hs historiesIntermediate) ToElems() []categoryElem {
 	return catObj.CategoryElems
 }
 
-func LookupsCategories(urlString string) string {
+func LookupsCategories(urlString string) (string, error) {
 	var c = make(chan historyIntermediate)
-	elems := UnmarshalURLs(urlString).HistoryElems
+	var e = make(chan error)
+	unmarshalled, err := UnmarshalURLs(urlString)
+	if err != nil {
+		return "", err
+	}
+	elems := unmarshalled.HistoryElems
 	var wg sync.WaitGroup
 
 	// Send off each URL to its own goroutine as explained below
 	wg.Add(len(elems))
 	for _, elem := range elems {
 		// Each URL is tested using a different goroutine, with the `response` objects sent back in the `c` channel
-		go func(c chan<- historyIntermediate, elem historyElem) {
+		go func(c chan<- historyIntermediate, e chan<- error, elem historyElem) {
 			defer wg.Done()
 
-			response := fetchFromURL(elem.URL)
+			response, err := fetchFromURL(elem.URL)			// TODO: Keep in mind an error is being discarded here
+			if err != nil {
+				e <- err
+				return					// Because `response` is likely not correct on error, return before using it
+			}
+
 			categories := nlu.GetAnalyzeResult(response).Categories
 			h := historyIntermediate{
 				ID:				elem.ID,
@@ -257,7 +278,7 @@ func LookupsCategories(urlString string) string {
 				Categories:		categories,
 			}
 			c <- h
-		}(c, elem)	// Note `elem` being explicitly included to prevent problems with progression of `elem` as in JS
+		}(c, e, elem)			// Note `elem` being included to prevent problems with progression of `elem` as in JS
 	}
 
 	// Close the channel when all goroutines are done, in a goroutine so the `wg.Wait()` doesn't block the main thread
@@ -269,14 +290,28 @@ func LookupsCategories(urlString string) string {
 	//Collect results
 	//var res []categoryElem
 	var hs historiesIntermediate
-	for response := range c {
+	for response := range c {		// Note how in the error handling above, `c` only receives completed results
 		hs = append(hs, response)
 	}
 
 	outputElems := hs.ToElems()
 
-	b, _ := json.MarshalIndent(outputElems, "", "	")
-	return string(b)
+	// TODO: Note we do technically have an `hs` with only completed and thus valid results, but we'll `err` anyway
+	select {
+	// In case of error back in the requesting step, return `err` now
+	case err := <-e:
+		return "", err
+	// In case of no error back in the requesting step, continue
+	default:
+		// Do nothing here, so it continues on. The default just prevents blocking as a try-receive
+	}
+
+	b, jsonErr := json.MarshalIndent(outputElems, "", "	")
+	if jsonErr != nil {
+		return "", jsonErr
+	}
+
+	return string(b), nil
 }
 
 func Test() {

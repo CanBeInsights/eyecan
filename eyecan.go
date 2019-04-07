@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/bclicn/color"
 	"github.com/gorilla/context"
 	"github.com/gorilla/mux"
 	"github.com/minerva-eyecan/eyecan/hex"
@@ -13,18 +14,20 @@ import (
 
 func init() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	prefix := log.Prefix()
+	log.SetPrefix(color.Blue(prefix))
 }
 
 // logHandler wraps a request handler in logging to mark the start and end of a request, and logs errors
 func logHandler(f func(w http.ResponseWriter,req *http.Request) error) func(w http.ResponseWriter,req *http.Request) {
 	return func(w http.ResponseWriter,req *http.Request) {
 		reqHash := context.Get(req, "hash")
-		log.Println(reqHash, "Starting request processing")
+		log.Println(reqHash, color.Green("Starting request processing"))
 		err := f(w, req)
 		if err != nil {
-			log.Println(reqHash, "Error on request", err.Error())
+			log.Println(reqHash, color.Red("Error on request:"), err.Error())
 		}
-		log.Println(reqHash, "End of request")
+		log.Println(reqHash, color.Green("End of request"))
 	}
 }
 
@@ -40,7 +43,7 @@ func requestHashMiddleware(next http.Handler) http.Handler {
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hash := context.Get(r, "hash")
-		log.Println(hash, "New request for", r.RequestURI)
+		log.Println(hash, color.Green("New request for"), color.Green(r.RequestURI))
 
 		next.ServeHTTP(w, r)
 	})
@@ -68,12 +71,15 @@ func ExtractCategories(w http.ResponseWriter, req *http.Request) error {
 	//users=append(users,user)
 
 	//input := req.Body
-	output := watson.LookupsCategories(string(body))
-	{		// TODO: Find a better way of isolating `err`s from each other than this
-		_, err := w.Write([]byte(output))
-		if err != nil {
-			return err
-		}
+	output, watsonErr := watson.LookupsCategories(string(body))
+	if watsonErr != nil {
+		return watsonErr
+	}
+
+	// TODO: Find a better way of isolating `err`s from each other than this
+	_, writeErr := w.Write([]byte(output))
+	if writeErr != nil {
+		return writeErr
 	}
 
 	return nil
