@@ -1,0 +1,305 @@
+package watson
+
+import (
+	"encoding/json"
+	"fmt"
+	"github.com/IBM/go-sdk-core/core"
+	"github.com/watson-developer-cloud/go-sdk/naturallanguageunderstandingv1"
+	"math"
+	"sync"
+	"time"
+)
+
+var nlu *naturallanguageunderstandingv1.NaturalLanguageUnderstandingV1
+
+type historyElem struct {
+	ID				string	`json:"id"`
+	LastVisitTime	float64	`json:"lastVisitTime"`
+	Title			string	`json:"title"`
+	TypedCount		int		`json:"typedCount"`
+	URL				string	`json:"url"`
+	VisitCount		int		`json:"visitCount"`
+}
+
+type historyObj struct {
+	HistoryElems	[]historyElem      `json:"historyElems"`
+}
+
+type categoryElem struct {
+	Label			string	`json:"label"`
+	Score			float64	`json:"score"`
+}
+
+type categoryObj struct {
+	CategoryElems	[]categoryElem		`json:"categoryElems"`
+}
+
+type historyIntermediate struct {
+	ID				string
+	LastVisitTime	float64
+	Title			string
+	TypedCount		int
+	URL				string
+	VisitCount		int
+	Categories		[]naturallanguageunderstandingv1.CategoriesResult
+}
+
+type categoryInstance struct {
+	ID				string
+	LastVisitTime	float64
+	TypedCount		int
+	VisitCount		int
+	InstanceScore	float64
+}
+
+type categoryIntermediate struct {
+	Label			string
+	Instances		[]categoryInstance
+}
+
+type historiesIntermediate []historyIntermediate
+
+//"id": "20",
+//"lastVisitTime": 1554596357082.7078,
+//"title": "javascript - Chrome extension form saving error - Stack Overflow",
+//"typedCount": 0,
+//"url": "https://stackoverflow.com/questions/36664868/chrome-extension-form-saving-error",
+//"visitCount": 1
+
+
+func init() {
+	naturalLanguageUnderstanding, naturalLanguageUnderstandingErr := naturallanguageunderstandingv1.
+		NewNaturalLanguageUnderstandingV1(&naturallanguageunderstandingv1.NaturalLanguageUnderstandingV1Options{
+			URL: "https://gateway.watsonplatform.net/natural-language-understanding/api",
+			Version: "2018-11-16",
+			IAMApiKey: "i9jGj42nqgiG6REz6Xn92eFi92Bx6ivVXW2yPLSqkKL9",
+		})
+
+	if naturalLanguageUnderstandingErr != nil {
+		panic(naturalLanguageUnderstandingErr)
+	}
+
+	nlu = naturalLanguageUnderstanding
+}
+
+func fetchFromText(text string) *core.DetailedResponse {
+	response, responseErr := nlu.Analyze(
+		&naturallanguageunderstandingv1.AnalyzeOptions{
+			Text: &text,
+			Features: &naturallanguageunderstandingv1.Features{
+				//Concepts: &naturallanguageunderstandingv1.ConceptsOptions{
+				//	Limit: core.Int64Ptr(10),
+				//},
+				Categories: &naturallanguageunderstandingv1.CategoriesOptions{
+					Limit: core.Int64Ptr(10),
+				},
+			},
+		},
+	)
+	if responseErr != nil {
+		panic(responseErr)
+	}
+
+	return response
+}
+
+func fetchFromURL(url string) *core.DetailedResponse {
+	response, responseErr := nlu.Analyze(
+		&naturallanguageunderstandingv1.AnalyzeOptions{
+			URL: &url,
+			Features: &naturallanguageunderstandingv1.Features{
+				//Concepts: &naturallanguageunderstandingv1.ConceptsOptions{
+				//	Limit: core.Int64Ptr(10),
+				//},
+				Categories: &naturallanguageunderstandingv1.CategoriesOptions{
+					Limit: core.Int64Ptr(10),
+				},
+			},
+			Language: core.StringPtr("en"),
+		},
+	)
+	if responseErr != nil {
+		panic(responseErr)
+	}
+
+	return response
+}
+
+func Lookup(url string) string {
+	response := fetchFromURL(url)
+	result := nlu.GetAnalyzeResult(response)
+	b, _ := json.MarshalIndent(result, "", "  ")
+	return string(b)
+}
+
+func LookupCategories(url string) string {
+	response := fetchFromURL(url)
+	result := nlu.GetAnalyzeResult(response).Categories
+	b, _ := json.MarshalIndent(result[0], "", "	")
+	return string(b)
+}
+
+func UnmarshalURLs(urlString string) historyObj {
+	inputJSON := `{ "historyElems": ` + urlString + ` }`	// Wrap array in valid outer JSON matching marshall struct
+	var res historyObj
+	// TODO: Handle this unhandled error, possibly using the code below it
+	json.Unmarshal([]byte(inputJSON), &res)
+	//if err != nil {
+	//	println()
+	//}
+	return res
+}
+
+// ToElems function receiver compiles the final set of output data based on the input data
+func (hs historiesIntermediate) ToElems() []categoryElem {
+	// TODO: Perfect this, as this is really where the score determination magic happens
+
+	// Step One: Combine each category into an overall `[]categoryIntermediate` categories object
+	var cats []categoryIntermediate
+	for _, h := range hs {
+		// Iterate over the categories so the data from this URL visit can be applied to all associated categories
+		for _, newCat := range h.Categories {
+			exists := false
+			// If the label is already in `cats`, add it to that section and move on to the next new category
+			for i, cat := range cats {
+				if *newCat.Label == cat.Label {
+					cats[i].Instances = append(cats[i].Instances, categoryInstance{
+						ID:            h.ID,
+						LastVisitTime: h.LastVisitTime,
+						TypedCount:    h.TypedCount,
+						VisitCount:    h.VisitCount,
+						InstanceScore: *newCat.Score,	// Note just copying the score for now
+					})
+					exists = true
+					break;
+				}
+			}
+
+			if !exists {
+				var instances = make([]categoryInstance, 1)
+				instances[0] = categoryInstance{
+					ID:            h.ID,
+					LastVisitTime: h.LastVisitTime,
+					TypedCount:    h.TypedCount,
+					VisitCount:    h.VisitCount,
+					InstanceScore: *newCat.Score,	// Note just copying the score for now
+				}
+				cats = append(cats, categoryIntermediate{
+					Label: *newCat.Label,
+					Instances: instances,
+				})
+			}
+		}
+	}
+
+	// Step Two: Calculate the overall score from each `categoryIntermediate` object to create a `categoryObj`
+	var catObj categoryObj
+	//var visits categoryObj
+	for _, cat := range cats {
+		// This here is the secret sauce, the process of devising a score given visit data
+		// The current way this works is by scaling up/down the score given based on a number of "penalties"
+		//visits.CategoryElems = append(visits.CategoryElems, categoryElem{
+		//	Label: cat.Label,
+		//})
+		//visits.CategoryElems[i].Label = cat.Label		// TODO: Remove
+
+		totalScore := 0.0
+		totalPenalty := 0.0
+		for _, instance := range cat.Instances {
+			// Penalty 1: Increase score with more visits, over a base of 1000 which also acts as max readable visits
+			numerator := math.Min(float64(instance.VisitCount), 1000.0)
+			denominator := 1000.0
+
+			//visits.CategoryElems[i].Score += float64(instance.VisitCount) // TODO: Remove
+
+			// Penalty 2: Keep score if at most 14 days old last visit, otherwise divide by number of 14-day periods
+			timeAgo := time.Duration(time.Now().Unix() * 1000 - int64(instance.LastVisitTime)) * time.Millisecond
+			if timeAgo > 14 * 24 * time.Hour {
+				denominator = denominator * float64(timeAgo / 14 * 24 * time.Hour)
+			}
+
+			totalScore += instance.InstanceScore
+			totalPenalty += numerator / denominator
+		}
+
+		catObj.CategoryElems = append(catObj.CategoryElems, categoryElem{
+			Label: cat.Label,
+			Score: totalScore / float64(len(cat.Instances)) * totalPenalty,
+		})
+	}
+
+	//b, _ := json.MarshalIndent(catObj.CategoryElems, "", "	")
+	//fmt.Println(string(b))
+	return catObj.CategoryElems
+}
+
+func LookupsCategories(urlString string) string {
+	var c = make(chan historyIntermediate)
+	elems := UnmarshalURLs(urlString).HistoryElems
+	var wg sync.WaitGroup
+
+	// Send off each URL to its own goroutine as explained below
+	wg.Add(len(elems))
+	for _, elem := range elems {
+		// Each URL is tested using a different goroutine, with the `response` objects sent back in the `c` channel
+		go func(c chan<- historyIntermediate, elem historyElem) {
+			defer wg.Done()
+
+			response := fetchFromURL(elem.URL)
+			categories := nlu.GetAnalyzeResult(response).Categories
+			h := historyIntermediate{
+				ID:				elem.ID,
+				LastVisitTime:	elem.LastVisitTime,
+				Title:			elem.Title,
+				TypedCount:		elem.TypedCount,
+				URL:			elem.URL,
+				VisitCount:		elem.VisitCount,
+				Categories:		categories,
+			}
+			c <- h
+		}(c, elem)	// Note `elem` being explicitly included to prevent problems with progression of `elem` as in JS
+	}
+
+	// Close the channel when all goroutines are done, in a goroutine so the `wg.Wait()` doesn't block the main thread
+	go func() {
+		wg.Wait()
+		close(c)
+	}()
+
+	//Collect results
+	//var res []categoryElem
+	var hs historiesIntermediate
+	for response := range c {
+		hs = append(hs, response)
+	}
+
+	outputElems := hs.ToElems()
+
+	b, _ := json.MarshalIndent(outputElems, "", "	")
+	return string(b)
+}
+
+func Test() {
+	text := `IBM is an American multinational technology company
+         headquartered in Armonk, New York, United States
+         with operations in over 170 countries.`
+	response, responseErr := nlu.Analyze(
+		&naturallanguageunderstandingv1.AnalyzeOptions{
+			Text: &text,
+			Features: &naturallanguageunderstandingv1.Features{
+				//Concepts: &naturallanguageunderstandingv1.ConceptsOptions{
+				//	Limit: core.Int64Ptr(10),
+				//},
+				Categories: &naturallanguageunderstandingv1.CategoriesOptions{
+					Limit: core.Int64Ptr(10),
+				},
+			},
+		},
+	)
+	if responseErr != nil {
+		panic(responseErr)
+	}
+	result := nlu.GetAnalyzeResult(response)
+	b, _ := json.MarshalIndent(result, "", "	")
+	fmt.Println(string(b))
+}
