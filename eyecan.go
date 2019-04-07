@@ -44,8 +44,14 @@ func allowCORSMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqHash := context.Get(r, "hash")
 
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		//w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		//w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		w.Header().Set("Access-Control-Allow-Origin", "*");
+		w.Header().Set("Access-Control-Allow-Credentials", "true");
+		w.Header().Set("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS,POST,PUT");
+		w.Header().Set("Access-Control-Allow-Headers", "Access-Control-Allow-Headers, Origin,Accept, X-Requested-With, Content-Type, Access-Control-Request-Method, Access-Control-Request-Headers");
+
 		log.Println(reqHash, "Adding CORS headers")
 
 		next.ServeHTTP(w, r)
@@ -91,6 +97,14 @@ func InformUserOnGet(w http.ResponseWriter, req *http.Request) error {
 }
 
 func ExtractCategories(w http.ResponseWriter, req *http.Request) error {
+	hash := context.Get(req, "hash")
+
+	// Hopefully handle `OPTIONS` requests correctly
+	if (*req).Method == "OPTIONS" {
+		log.Println(hash, "Responded to OPTIONS request")
+		return nil
+	}
+
 	body, err := ioutil.ReadAll(req.Body)
 	if err != nil {
 		return err
@@ -125,12 +139,12 @@ func main() {
 	//fmt.Println(data)
 
 	router := mux.NewRouter()
+	router.Use(allowCORSMiddleware)
 	router.Use(requestHashMiddleware)
 	router.Use(loggingMiddleware)
-	router.Use(allowCORSMiddleware)
 
 	router.HandleFunc("/extract", logHandler(InformUserOnGet)).Methods("GET")
-	router.HandleFunc("/extract", logHandler(ExtractCategories)).Methods("POST")
+	router.HandleFunc("/extract", logHandler(ExtractCategories)).Methods("POST",  "OPTIONS")
 	//router.HandleFunc("/users", logHandler(GetUsers)).Methods("GET")
 	//router.HandleFunc("/users/{id}", logHandler(GetUserById)).Methods("GET")
 	//router.HandleFunc("/users/{id}", logHandler(CreateUser)).Methods("POST")

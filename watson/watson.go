@@ -4,12 +4,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/IBM/go-sdk-core/core"
+	//"github.com/gosuri/uiprogress"
+
+	//"github.com/gosuri/uiprogress"
+
 	"github.com/watson-developer-cloud/go-sdk/naturallanguageunderstandingv1"
 	"math"
+	"strings"
 	"sync"
 	"time"
 )
 
+const LOOKUP_TIMEOUT = 5 * time.Second
 var nlu *naturallanguageunderstandingv1.NaturalLanguageUnderstandingV1
 
 type historyElem struct {
@@ -151,7 +157,10 @@ func LookupCategories(url string) (string, error) {
 }
 
 func UnmarshalURLs(urlString string) (historyObj, error) {
-	inputJSON := `{ "historyElems": ` + urlString + ` }`	// Wrap array in valid outer JSON matching marshall struct
+	quoteStripped := strings.Trim(urlString, "\"")
+	deslashed := strings.Replace(quoteStripped, `\"`, `"`, 100000000000)
+	inputJSON := `{ "historyElems": ` + deslashed + ` }`	// Wrap array in valid outer JSON matching marshall struct
+	fmt.Println(inputJSON)
 	var res historyObj
 	// TODO: Handle this unhandled error, possibly using the code below it
 	err := json.Unmarshal([]byte(inputJSON), &res)
@@ -256,6 +265,13 @@ func LookupsCategories(urlString string) (string, error) {
 
 	// Send off each URL to its own goroutine as explained below
 	wg.Add(len(elems))
+
+	// Create progress bar
+	//uiprogress.Start()            // start rendering
+	//bar := uiprogress.AddBar(len(elems)) // Add a new bar
+	//bar.AppendCompleted()
+	//bar.PrependElapsed()
+
 	for _, elem := range elems {
 		// Each URL is tested using a different goroutine, with the `response` objects sent back in the `c` channel
 		go func(c chan<- historyIntermediate, e chan<- error, elem historyElem) {
@@ -277,6 +293,8 @@ func LookupsCategories(urlString string) (string, error) {
 				VisitCount:		elem.VisitCount,
 				Categories:		categories,
 			}
+
+			//bar.Incr()
 			c <- h
 		}(c, e, elem)			// Note `elem` being included to prevent problems with progression of `elem` as in JS
 	}
@@ -287,24 +305,48 @@ func LookupsCategories(urlString string) (string, error) {
 		close(c)
 	}()
 
+	// Alternatively, quit early without closing the channel for a quick and dirty timeout TODO: Fix This Memory Leak
+	timeout := false
+
 	//Collect results
 	//var res []categoryElem
 	var hs historiesIntermediate
-	for response := range c {		// Note how in the error handling above, `c` only receives completed results
-		hs = append(hs, response)
+
+	for {
+		select {
+			case <-time.After(1 * time.Second):
+				timeout = true
+				break
+			case response, open := <-c:
+				if open {
+					hs = append(hs, response)
+				} else {
+					timeout = true
+					break
+				}
+		}
+		if timeout {
+			break
+		}
 	}
+
+	//bar.Set(len(elems))
+
+	//for response := range c {		// Note how in the error handling above, `c` only receives completed results
+	//	hs = append(hs, response)
+	//}
 
 	outputElems := hs.ToElems()
 
-	// TODO: Note we do technically have an `hs` with only completed and thus valid results, but we'll `err` anyway
-	select {
-	// In case of error back in the requesting step, return `err` now
-	case err := <-e:
-		return "", err
-	// In case of no error back in the requesting step, continue
-	default:
-		// Do nothing here, so it continues on. The default just prevents blocking as a try-receive
-	}
+	////TODO: Note we do technically have an `hs` with only completed and thus valid results, but we'll `err` anyway
+	//select {
+	//// In case of error back in the requesting step, return `err` now
+	//case err := <-e:
+	//	return "", err
+	//// In case of no error back in the requesting step, continue
+	//default:
+	//	// Do nothing here, so it continues on. The default just prevents blocking as a try-receive
+	//}
 
 	b, jsonErr := json.MarshalIndent(outputElems, "", "	")
 	if jsonErr != nil {
