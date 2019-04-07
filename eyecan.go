@@ -10,12 +10,21 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"runtime"
 )
+
+var PORT string
 
 func init() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	prefix := log.Prefix()
 	log.SetPrefix(color.Blue(prefix))
+
+	if runtime.GOOS == "linux" {
+		PORT = "80"
+	} else {
+		PORT = "8081"
+	}
 }
 
 // logHandler wraps a request handler in logging to mark the start and end of a request, and logs errors
@@ -100,12 +109,13 @@ func ExtractCategories(w http.ResponseWriter, req *http.Request) error {
 }
 
 func main() {
-	fmt.Println("magic is happening on port 8081")
+
+	fmt.Println("Starting up on port", PORT)
 	//data := watson.LookupCategories("https://cloud.ibm.com/apidocs/natural-language-understanding?code=go")
 	//_ = watson.LookupsCategories(input)
 	//fmt.Println(data)
 
-	router:=mux.NewRouter()
+	router := mux.NewRouter()
 	router.Use(requestHashMiddleware)
 	router.Use(loggingMiddleware)
 	router.Use(allowCORSMiddleware)
@@ -117,5 +127,5 @@ func main() {
 	//router.HandleFunc("/users/{id}", logHandler(CreateUser)).Methods("POST")
 	//router.HandleFunc("/users/{id}", logHandler(DeleteUser)).Methods("DELETE")
 
-	log.Fatal(http.ListenAndServe(":8081",router))
+	log.Fatal(http.ListenAndServe(":" + PORT, router))
 }
