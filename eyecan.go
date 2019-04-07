@@ -65,7 +65,16 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hash := context.Get(r, "hash")
 		ipForwardedFor := r.Header.Get("X-Forwarded-For")
-		log.Println(hash, color.Green("New request from"), color.Green(ipForwardedFor),
+		ipRemoteAddr := r.RemoteAddr
+		var ipString string
+		if ipForwardedFor != "" {
+			ipString = ipForwardedFor + " (X-Forwarded-For)"
+		} else if ipRemoteAddr != "" {
+			ipString = ipRemoteAddr + " (RemoteAddr)"
+		} else {
+			ipString = "unknown"
+		}
+		log.Println(hash, color.Green("New request from"), color.Green(ipString),
 			color.Green("for"), color.Green(r.RequestURI))
 
 		next.ServeHTTP(w, r)
